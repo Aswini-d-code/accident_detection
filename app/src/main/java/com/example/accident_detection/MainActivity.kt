@@ -5,6 +5,7 @@ import android.annotation.SuppressLint
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.location.Location
+import android.os.Build
 import android.os.Bundle
 import android.os.Looper
 import android.util.Log
@@ -19,6 +20,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import com.example.accident_detection.api.AccidentRequestBody
 import com.example.accident_detection.api.NetworkModule
 import com.example.accident_detection.databinding.ActivityMainBinding
+import com.example.accident_detection.services.AccidentDetectionService
 import com.google.android.gms.location.*
 import com.google.firebase.auth.ktx.auth
 import com.google.firebase.firestore.ktx.firestore
@@ -47,7 +49,7 @@ class MainActivity : AppCompatActivity() {
     private val db by lazy { Firebase.firestore }
 
     private lateinit var fusedLocationClient: FusedLocationProviderClient
-    private var currentLocation: Location? = null // Still useful for background updates
+    private var currentLocation: Location? = null
 
     private val _uiState = MutableStateFlow(UiState())
     private val uiState: StateFlow<UiState> = _uiState.asStateFlow()
@@ -58,22 +60,36 @@ class MainActivity : AppCompatActivity() {
             checkContactStatus()
         }
 
-    private val locationPermissionRequest = registerForActivityResult(
+    // UPDATED: Activity result launcher for handling multiple permissions
+    private val permissionRequest = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
-        when {
-            permissions.getOrDefault(Manifest.permission.ACCESS_FINE_LOCATION, false) -> {
-                Log.d(TAG, "Fine location permission granted")
-                startLocationUpdates() // Start background updates
-            }
-            permissions.getOrDefault(Manifest.permission.ACCESS_COARSE_LOCATION, false) -> {
-                Log.d(TAG, "Coarse location permission granted")
-                startLocationUpdates() // Start background updates
-            }
-            else -> {
-                Toast.makeText(this, "Location permission is required for SOS.", Toast.LENGTH_LONG).show()
-            }
+        val fineLocationGranted = permissions.getOrDefault(Manifest.permission.ACCESS_FINE_LOCATION, false)
+        val coarseLocationGranted = permissions.getOrDefault(Manifest.permission.ACCESS_COARSE_LOCATION, false)
+        val notificationsGranted = permissions.getOrDefault(Manifest.permission.POST_NOTIFICATIONS, false)
+        val backgroundLocationGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            permissions.getOrDefault(Manifest.permission.ACCESS_BACKGROUND_LOCATION, false)
+        } else {
+            true // On older versions, this permission is granted automatically with fine/coarse location
         }
+
+        if (fineLocationGranted || coarseLocationGranted) {
+            Log.d(TAG, "Location permission granted.")
+            startLocationUpdates()
+        } else {
+            Toast.makeText(this, "Location is required for SOS functionality.", Toast.LENGTH_LONG).show()
+        }
+
+        if (!notificationsGranted) {
+            Toast.makeText(this, "Notifications are required for automatic alerts.", Toast.LENGTH_LONG).show()
+        }
+
+        if (!backgroundLocationGranted) {
+            Toast.makeText(this, "Background location access is needed for full functionality.", Toast.LENGTH_LONG).show()
+        }
+
+        // After permissions are handled, start the detection service
+        startAccidentDetectionService()
     }
 
 
@@ -86,7 +102,9 @@ class MainActivity : AppCompatActivity() {
 
         setupClickListeners()
         observeUiState()
-        checkLocationPermission()
+
+        // UPDATED: Centralized permission check and service start
+        checkAndRequestPermissions()
     }
 
     override fun onResume() {
@@ -113,12 +131,9 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 uiState.collect { state ->
-                    // Update UI based on the state
                     binding.progressBar.visibility = if (state.isLoading) View.VISIBLE else View.GONE
                     binding.btnSos.isEnabled = !state.isLoading
-
-                    binding.tvUserName.text = if(state.userName != null) "Welcome, ${state.userName}" else "Welcome"
-
+                    binding.tvUserName.text = if (state.userName != null) "Welcome, ${state.userName}" else "Welcome"
                     binding.layoutNoContacts.visibility = if (state.hasContacts) View.GONE else View.VISIBLE
                     binding.btnSos.visibility = if (state.hasContacts) View.VISIBLE else View.GONE
                 }
@@ -150,18 +165,45 @@ class MainActivity : AppCompatActivity() {
             }
     }
 
-    private fun checkLocationPermission() {
+    // NEW & IMPROVED: Checks all required permissions and launches request if needed.
+    private fun checkAndRequestPermissions() {
+        val permissionsToRequest = mutableListOf<String>()
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-            locationPermissionRequest.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION))
+            permissionsToRequest.add(Manifest.permission.ACCESS_FINE_LOCATION)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            permissionsToRequest.add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_BACKGROUND_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            // Background location is requested separately after fine location is granted.
+            // For simplicity in this flow, we can request it here, but best practice is a two-step request.
+            permissionsToRequest.add(Manifest.permission.ACCESS_BACKGROUND_LOCATION)
+        }
+
+        if (permissionsToRequest.isNotEmpty()) {
+            Log.d(TAG, "Requesting permissions: $permissionsToRequest")
+            permissionRequest.launch(permissionsToRequest.toTypedArray())
         } else {
+            Log.d(TAG, "All permissions already granted.")
             startLocationUpdates()
+            startAccidentDetectionService()
         }
     }
 
+    // NEW: Starts the background service correctly.
+    private fun startAccidentDetectionService() {
+        val intent = Intent(this, AccidentDetectionService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent)
+        } else {
+            startService(intent)
+        }
+        Log.d(TAG, "Requested to start AccidentDetectionService.")
+    }
 
     @SuppressLint("MissingPermission")
     private suspend fun handleSosClick() {
-        _uiState.update { it.copy(isLoading = true) } // Show loading indicator
+        _uiState.update { it.copy(isLoading = true) }
         Toast.makeText(this, "Getting current location...", Toast.LENGTH_SHORT).show()
 
         val userId = auth.currentUser?.uid
@@ -186,18 +228,17 @@ class MainActivity : AppCompatActivity() {
             Log.e(TAG, "Could not get on-demand location", e)
         }
 
-        // Fallback to last known location if high-accuracy one fails
         if (freshLocation == null) {
             freshLocation = currentLocation
         }
 
         if (freshLocation == null) {
-            Toast.makeText(this, "Could not get current location. Please ensure location is enabled and try again.", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Could not get current location. Please ensure location is enabled.", Toast.LENGTH_LONG).show()
             _uiState.update { it.copy(isLoading = false) }
             return
         }
 
-        Log.d(TAG, "All checks passed. Proceeding with SOS.")
+        Log.d(TAG, "All checks passed. Proceeding with manual SOS.")
         sendSosNotification(userId, userName, freshLocation)
     }
 
@@ -218,38 +259,24 @@ class MainActivity : AppCompatActivity() {
 
     private fun sendSosNotification(userId: String, userName: String, location: Location) {
         Toast.makeText(this, "Reporting accident...", Toast.LENGTH_SHORT).show()
-
         lifecycleScope.launch(Dispatchers.IO) {
             try {
-                // --- First Network Call: Report the accident ---
-
-                // 1. Create the request body object
                 val requestBody = AccidentRequestBody(
                     userId = userId,
                     name = userName,
                     lat = location.latitude,
                     lon = location.longitude
                 )
-
-                // 2. Pass the single body object to the function
                 val reportResponse = NetworkModule.notificationApi.reportAccident(requestBody)
 
                 if (reportResponse.isSuccessful && reportResponse.body() != null) {
                     val accidentId = reportResponse.body()!!.accidentId
                     Log.d(TAG, "SUCCESS: /accident call returned ID: $accidentId")
-
                     withContext(Dispatchers.Main) {
                         Toast.makeText(this@MainActivity, "Accident reported. Triggering alerts...", Toast.LENGTH_SHORT).show()
                     }
-
-                    // --- CRUCIAL: Add a 2-second delay before the next API call ---
-                    Log.d(TAG, "Waiting for 2 seconds before triggering alerts...")
-                    delay(2000) // Wait for 2000 milliseconds
-
-                    // --- Second Network Call: Trigger the alerts ---
-                    Log.d(TAG, "Calling /trigger_alerts for ID: $accidentId")
+                    delay(2000)
                     val alertResponse = NetworkModule.notificationApi.triggerAlerts(accidentId)
-
                     withContext(Dispatchers.Main) {
                         if (alertResponse.isSuccessful) {
                             Log.d(TAG, "SUCCESS: /trigger_alerts call was successful.")
@@ -260,7 +287,7 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                 } else {
-                    val errorBody = reportResponse.errorBody()?.string() // Read error body for more details
+                    val errorBody = reportResponse.errorBody()?.string()
                     Log.e(TAG, "FAILED: /accident call failed with code ${reportResponse.code()}. Body: $errorBody")
                     withContext(Dispatchers.Main) {
                         Toast.makeText(this@MainActivity, "Failed to report accident. Server error: ${reportResponse.code()}", Toast.LENGTH_LONG).show()
@@ -272,7 +299,6 @@ class MainActivity : AppCompatActivity() {
                     Toast.makeText(this@MainActivity, "SOS failed: ${e.message}", Toast.LENGTH_LONG).show()
                 }
             } finally {
-                // This block ALWAYS runs, ensuring the UI is reset
                 withContext(Dispatchers.Main) {
                     _uiState.update { it.copy(isLoading = false) }
                 }

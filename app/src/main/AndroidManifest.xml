@@ -2,25 +2,26 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- All necessary permissions for location, internet, and foreground services -->
-    <uses-permission android:name="android.permission.SEND_SMS" />
-    <!-- Declare that telephony (for SMS) is not a required hardware feature -->
-    <uses-feature android:name="android.hardware.telephony" android:required="false" />
+    <!-- PERMISSIONS SECTION -->
 
-    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
+    <!-- *** NEW PERMISSION REQUIRED FOR BOOT RECEIVER *** -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
-    <!-- Permission to detect motion for accident detection -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.SEND_SMS" />
     <uses-permission android:name="android.permission.HIGH_SAMPLING_RATE_SENSORS" />
-    <!-- Permissions for location access -->
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
-
+    <!-- HARDWARE FEATURES -->
+    <uses-feature android:name="android.hardware.telephony" android:required="false" />
+    <uses-feature android:name="android.hardware.location" android:required="false" />
+    <uses-feature android:name="android.hardware.location.gps" android:required="false" />
 
 
     <application
@@ -35,7 +36,12 @@
         android:theme="@style/Theme.Accident_detection"
         tools:targetApi="31">
 
-        <!-- 1. SplashActivity is the correct starting point for the app. -->
+        <!-- Activity Declarations -->
+        <receiver
+            android:name=".services.AlertCancelReceiver"
+            android:enabled="true"
+            android:exported="false" />
+
         <activity
             android:name=".SplashActivity"
             android:exported="true">
@@ -45,7 +51,27 @@
             </intent-filter>
         </activity>
 
-        <!-- 2. Declare ALL other activities with their exact file names. -->
+        <activity android:name=".LoginActivity" android:exported="false" />
+        <activity android:name=".RegisterActivity" android:exported="false" />
+        <activity android:name=".PermissionsActivity" android:exported="false" />
+        <activity android:name=".MainActivity" android:exported="false" />
+        <activity android:name=".SettingsActivity" android:exported="false" />
+        <activity android:name=".EmergencyContactActivity" android:exported="false" />
+
+
+        <!-- *** NEW RECEIVER DECLARATION *** -->
+        <receiver
+            android:name=".BootCompletedReceiver"
+            android:enabled="true"
+            android:exported="true">
+            <intent-filter>
+                <!-- This is the system event the receiver listens for -->
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+
+
+        <!-- Service Declarations -->
         <service
             android:name=".MyFirebaseMessagingService"
             android:exported="false">
@@ -54,36 +80,18 @@
             </intent-filter>
         </service>
 
-        <activity
-            android:name=".LoginActivity"
-            android:exported="false" />
-        <activity
-            android:name=".RegisterActivity"
-            android:exported="false" />
-        <activity
-            android:name=".PermissionsActivity"
-            android:exported="false" />
-        <activity
-            android:name=".MainActivity"
-            android:exported="false" />
-        <activity
-            android:name=".SettingsActivity"
-            android:exported="false" />
-
-        <!-- CORRECTED: Changed EmergencyContactsActivity to EmergencyContactActivity to match your file name -->
-        <activity
-            android:name=".EmergencyContactActivity"
-            android:exported="false" />
-
-
-        <!-- 3. Declare ALL services. -->
         <service
             android:name=".LocationService"
             android:foregroundServiceType="location" />
 
         <service
-            android:name=".AccidentDetectionService"
-            android:exported="false" />
+            android:name=".services.AccidentDetectionService"
+            android:exported="false"
+            android:foregroundServiceType="location|specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Your app&apos;s safety feature for detecting car crashes and alerting emergency contacts." />
+        </service>
 
     </application>
 
